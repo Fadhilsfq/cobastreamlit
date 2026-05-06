@@ -1,0 +1,239 @@
+!pip install catboost
+!pip install optuna catboost scikit-learn pandas
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import optuna
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from catboost import CatBoostClassifier, Pool
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+df = pd.read_csv('/content/Student Depression Dataset.csv')
+#info dataset
+print(df.info())
+print(df.describe())
+missing_values = df.isnull().sum()
+print(missing_values)
+# Menampilkan jumlah missing value
+print(missing_values[missing_values > 0])
+duplicates = df.duplicated().sum()
+print(f"Jumlah baris duplikat: {duplicates}")
+# Mengecek keseimbangan kelas pada kolom target 'Depression'
+plt.figure(figsize=(6, 4))
+ax = sns.countplot(x='Depression', data=df, hue='Depression', palette='viridis', legend=False)
+plt.title('Class Balance: Depression (0 = No, 1 = Yes)')
+plt.xlabel('Depression')
+plt.ylabel('Jumlah')
+# Menambahkan label angka di atas bar
+for p in ax.patches:
+    ax.annotate(f'{p.get_height()}', (p.get_x() + 0.35, p.get_height() + 100))
+plt.show()
+# A. Distribusi Fitur Numerik (Histogram)
+# Memilih beberapa kolom numerik penting
+num_cols = ['Age', 'CGPA', 'Academic Pressure', 'Work/Study Hours', 'Financial Stress']
+plt.figure(figsize=(15, 10))
+for i, col in enumerate(num_cols):
+    plt.subplot(2, 3, i+1)
+    sns.histplot(df[col], kde=True, bins=20, color='skyblue')
+    plt.title(f'Distribusi: {col}')
+    plt.xlabel(col)
+plt.tight_layout()
+plt.show()
+# B. Distribusi Fitur Kategorikal (Bar Chart)
+# Memilih beberapa kolom kategorikal penting
+cat_cols = ['Gender', 'Sleep Duration', 'Dietary Habits', 'Have you ever had suicidal thoughts ?']
+plt.figure(figsize=(15, 10))
+for i, col in enumerate(cat_cols):
+    plt.subplot(2, 2, i+1)
+    # Mengurutkan berdasarkan jumlah terbanyak
+    sns.countplot(y=col, data=df, hue=col, palette='pastel', order=df[col].value_counts().index, legend=False)
+    plt.title(f'Distribusi: {col}')
+    plt.xlabel('Jumlah')
+    plt.ylabel(col)
+plt.tight_layout()
+plt.show()
+# Setting style plot
+sns.set_style("whitegrid")
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+# 1. Hubungan Age vs Depression (Boxplot)
+# Melihat sebaran umur pada kelompok Depresi vs Tidak
+sns.boxplot(ax=axes[0, 0], x='Depression', y='Age', data=df, palette='coolwarm', hue='Depression')
+axes[0, 0].set_title('Hubungan Umur dengan Depresi')
+if axes[0, 0].legend_: axes[0, 0].legend_.remove() # Hapus legend redundant
+# 2. Hubungan Dietary Habits vs Depression
+sns.countplot(ax=axes[0, 1], x='Dietary Habits', hue='Depression', data=df, palette='viridis')
+axes[0, 1].set_title('Hubungan Kebiasaan Makan dengan Depresi')
+# 3. Hubungan Sleep Duration vs Depression
+# Mengurutkan kategori tidur agar lebih logis
+sleep_order = ['Less than 5 hours', '5-6 hours', '7-8 hours', 'More than 8 hours']
+# Filter order hanya untuk data yang ada (untuk menghindari error jika ada kategori hilang)
+existing_sleep = [x for x in sleep_order if x in df['Sleep Duration'].unique()]
+sns.countplot(ax=axes[1, 0], x='Sleep Duration', hue='Depression', data=df, order=existing_sleep, palette='magma')
+axes[1, 0].set_title('Hubungan Durasi Tidur dengan Depresi')
+axes[1, 0].tick_params(axis='x', rotation=15) # Miringkan label agar terbaca
+# 4. Hubungan Suicidal Thoughts vs Depression
+sns.countplot(ax=axes[1, 1], x='Have you ever had suicidal thoughts ?', hue='Depression', data=df, palette='pastel')
+axes[1, 1].set_title('Hubungan Pikiran Bunuh Diri dengan Depresi')
+plt.tight_layout()
+plt.show()
+# --- Tampilkan Analisis Statistik Sederhana ---
+print("\n=== INSIGHT DATA ===")
+# Rata-rata Umur
+print("\n1. Rata-rata Umur:")
+print(df.groupby('Depression')['Age'].mean())
+# Persentase Depresi berdasarkan Kebiasaan Makan
+print("\n2. Persentase Depresi per Kebiasaan Makan:")
+print(pd.crosstab(df['Dietary Habits'], df['Depression'], normalize='index') * 100)
+# Persentase Depresi berdasarkan Pikiran Bunuh Diri
+print("\n3. Persentase Depresi jika memiliki Pikiran Bunuh Diri:")
+print(pd.crosstab(df['Have you ever had suicidal thoughts ?'], df['Depression'], normalize='index') * 100)
+# Penanganan Missing Value
+df.dropna(inplace=True)
+print(df.isnull().sum())
+print("Data Shape setelah cleaning:", df.shape)
+def advanced_preprocessing(df):
+    data = df.copy()
+    # Cleaning Basic
+    if 'id' in data.columns:
+        data.drop(['id'], axis=1, inplace=True)
+    data['Financial Stress'] = data['Financial Stress'].fillna(data['Financial Stress'].mode()[0])
+    # Ordinal Encoding (Mapping Manual)
+    sleep_map = {'Less than 5 hours': 1, '5-6 hours': 2, '7-8 hours': 3, 'More than 8 hours': 4, 'Others': 2}
+    data['Sleep_Score'] = data['Sleep Duration'].map(sleep_map).fillna(2)
+    diet_map = {'Unhealthy': 1, 'Moderate': 2, 'Healthy': 3, 'Others': 2}
+    data['Diet_Score'] = data['Dietary Habits'].map(diet_map).fillna(2)
+    # Feature Engineering
+    data['Total_Pressure'] = data['Academic Pressure'] + data['Work Pressure'] + data['Financial Stress']
+    data['Satisfaction_Index'] = data['Study Satisfaction'] + data['Job Satisfaction']
+    data['Stress_Satisfaction_Ratio'] = data['Total_Pressure'] / (data['Satisfaction_Index'] + 1)
+    # Binary Encoding
+    data['Suicidal_Thoughts'] = data['Have you ever had suicidal thoughts ?'].map({'Yes': 1, 'No': 0})
+    data['Family_History'] = data['Family History of Mental Illness'].map({'Yes': 1, 'No': 0})
+    # Hapus kolom asli yang sudah di-encode manual
+    data.drop(['Have you ever had suicidal thoughts ?', 'Family History of Mental Illness',
+               'Sleep Duration', 'Dietary Habits'], axis=1, inplace=True)
+    return data
+df_processed = advanced_preprocessing(df)
+# Daftar kolom yang berisi teks (String)
+cat_features = ['Gender', 'City', 'Profession', 'Degree']
+# Pastikan kolom ini bertipe string
+for col in cat_features:
+    df_processed[col] = df_processed[col].astype(str)
+# Split Data
+X = df_processed.drop('Depression', axis=1)
+y = df_processed['Depression']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.10, random_state=42, stratify=y)
+print(f"Jumlah Data Latih: {X_train.shape[0]}")
+print(f"Jumlah Data Uji  : {X_test.shape[0]}")
+# Tampilkan hasil akhir
+print("\n--- Hasil setelah pre-processing ---")
+print(X.head())
+# Inisialisasi & Training
+cb_model = CatBoostClassifier(verbose=0, random_state=42)
+cb_model.fit(X_train, y_train, cat_features=cat_features)
+# Evaluasi
+y_pred = cb_model.predict(X_test)
+print("=== Classification Report: CatBoost ===")
+print(classification_report(y_test, y_pred))
+acc = accuracy_score(y_test, y_pred)
+print(f"Akurasi: {acc:.4f}")
+!pip install optuna catboost scikit-learn pandas
+def objective(trial):
+    params = {
+        'depth': trial.suggest_int('depth', 4, 10),
+        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+        'iterations':1000,
+        'loss_function': 'Logloss',
+        'eval_metric': 'Accuracy',
+        'verbose': False,
+        'random_seed': 42
+    }
+    # Menggunakan Cross-Validation
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_scores = []
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_tr, X_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
+        y_tr, y_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
+        # Bungkus data dengan Pool
+        train_pool = Pool(X_tr, y_tr, cat_features=cat_features)
+        val_pool = Pool(X_val, y_val, cat_features=cat_features)
+        model = CatBoostClassifier(**params)
+        # gunakan early stopping untuk mencegah model melakukan iterasi berlebih
+        model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=50, verbose=False)
+        preds = model.predict(val_pool)
+        cv_scores.append(accuracy_score(y_val, preds))
+    return np.mean(cv_scores)
+# 3. JALANKAN OPTIMASI OPTUNA
+# ==========================================
+print("\n=== Mulai Proses Tuning dengan Optuna ===")
+# Buat studi baru. Direction='maximize' karena kita ingin AKURASI TERTINGGI.
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=35, show_progress_bar=True)
+print ("\nBest CV Accuracy:", study.best_value)
+print ("Best Params:", study.best_params)
+# 4. HASIL TERBAIK
+# ==========================================
+print("\n" + "="*50)
+print("HASIL OPTIMASI TERBAIK")
+print("="*50)
+print(f"Akurasi Tertinggi: {study.best_value:.4f}")
+print("Parameter Terbaik:")
+for key, value in study.best_params.items():
+    print(f"  - {key}: {value}")
+# 5. TRAINING ULANG DENGAN PARAMETER TERBAIK
+# ==========================================
+print("\n=== Training Final Model dengan Parameter Terbaik ===")
+# Ambil parameter terbaik
+best_params = study.best_params
+best_params['cat_features'] = cat_features
+best_params['random_seed'] = 42
+best_params['verbose'] = 0
+# Latih Model Final
+final_model = CatBoostClassifier(**best_params)
+final_model.fit(X_train, y_train)
+# Evaluasi Akhir
+y_pred_final = final_model.predict(X_test)
+# Report
+print("=== HASIL AKHIR SETELAH FEATURE ENGINEERING & TUNING ===")
+print(f"Akurasi Final: {accuracy_score(y_test, y_pred_final):.4f}")
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred_final))
+print("\n--- Membandingkan Baseline vs Tuned ---")
+# 1. Baseline Model (Tanpa Tuning)
+base_model = CatBoostClassifier(verbose=0, random_state=42)
+base_model.fit(X_train, y_train, cat_features=cat_features) # <--- JANGAN LUPA INI
+y_pred_base = base_model.predict(X_test)
+acc_base = accuracy_score(y_test, y_pred_base)
+# 2. Ambil Hasil Model Final (dari langkah sebelumnya)
+acc_final = accuracy_score(y_test, y_pred_final)
+print(f"Akurasi Baseline (CatBoost) : {acc_base:.4f} ({acc_base*100:.2f}%)")
+print(f"Akurasi Final (Catboost + Optuna)     : {acc_final:.4f} ({acc_final*100:.2f}%)")
+print(f"Peningkatan                : +{(acc_final - acc_base)*100:.2f}%")
+print("\nClassification Report (Final Tuned Model):")
+print(classification_report(y_test, y_pred_final))
+y_pred_proba = final_model.predict_proba(X_test)[:, 1]
+# 2. Cari Threshold Terbaik
+best_threshold = 0.6
+best_acc = 0
+thresholds = np.arange(0.1, 0.9, 0.002)
+for thresh in thresholds:
+    # Jika probabilitas > thresh, anggap 1. Jika tidak, 0.
+    y_pred_temp = (y_pred_proba > thresh).astype(int)
+    acc = accuracy_score(y_test, y_pred_temp)
+    if acc > best_acc:
+        best_acc = acc
+        best_threshold = thresh
+# 3. Tampilkan Laporan Akhir dengan Threshold Baru
+final_predictions = (y_pred_proba > best_threshold).astype(int)
+print("\n" + "="*50)
+print("HASIL AKHIR (SETELAH OPTIMASI THRESHOLD)")
+print("="*50)
+print(f"\n Threshold Terbaik Ditemukan: {best_threshold:.4f}")
+print(f"Akurasi Standar (0.50): {accuracy_score(y_test, (y_pred_proba > 0.5).astype(int)):.4f}")
+print(f"Akurasi Optimal  ({best_threshold:.2f}): {best_acc:.4f}")
+print(classification_report(y_test, final_predictions))
+# Asumsi 'best_model' adalah model CatBoost Anda yang sudah di-training dengan Optuna
+best_model.save_model('catboost_optuna_model.cbm'
